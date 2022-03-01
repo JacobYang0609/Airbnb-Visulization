@@ -1,0 +1,207 @@
+---
+title: "Airbnb Data Visualization"
+author: "Jacob Yang"
+date: "4/13/2021"
+output: html_document
+---
+
+## Boston AirBNB
+### EDA Analysis
+
+* Load the dataset `listings.csv` which includes information about AirBNB listings in Boston.
+```{r,message=FALSE, warning=FALSE}
+library(tidyverse)
+listings <- read_csv("listings.csv")
+Sys.setenv("MAPBOX_TOKEN" = "pk.eyJ1IjoicmljZW1hY2hpbmUiLCJhIjoiY2tuZXJ1Z2x0MDEweDJvcGF4OGZtcDR4ZiJ9.-vyiET9gaDK4jXrzueRdZw")
+```
+
+* EAD Analysis
+```{r,message=FALSE, warning=FALSE}
+library(plotly)
+(boston_airbnb <- listings)
+summary(listings$price)
+head(listings$price[order(listings$price)], 20)
+tail(listings$price[order(listings$price)], 20)
+plot_ly(listings, y = ~price, type = "box")
+
+# So, there are 8 units priced over 1000:
+sum(listings$price > 1000)
+
+listings %>% 
+  filter(price > 1000) %>%
+  select(name, room_type, price)
+
+# The 10000 look like plain errors: 10000 for a private room with a double bed?!
+# The other private rooms seem to be just overpriced.
+
+# Let's examine more carefully the "Entire home/apt" category:
+
+gg_pricey <- 
+  listings %>%
+    filter(room_type == "Entire home/apt") %>%
+    select(price) %>%
+    ggplot() +
+      geom_histogram(aes(x = log(price, 10)))
+
+ggplotly(gg_pricey)
+
+# And there are 4 units priced at zero:
+sum(listings$price == 0)
+
+listings %>% 
+  filter(price == 0) %>%
+  select(name, room_type, price)
+
+
+# The zero entries are probably just wrong.
+
+# To deal with those I choose to remove all price == 0 and all price > 1000.
+# In addition, I take log10 price so to better work with the default colorscale:
+boston_airbnb <-
+  listings %>%
+    filter(price > 0 & price <= 1000)
+
+
+# Create a plot that demonstrates the effect of neighborhood on price.
+
+boston_airbnb <-
+  listings %>%
+    filter(price > 0 & price <= 1000) %>%
+    mutate(log_price = log(price, 10))
+
+lvls <- 
+  boston_airbnb %>%
+    group_by(neighbourhood) %>%
+    summarise(m = median(price)) %>%
+    arrange(m) %>%
+    pull(neighbourhood)
+
+(p0 <-
+  plot_ly(
+    boston_airbnb,
+    x = ~factor(neighbourhood, lvls),
+    y = ~price,
+    type = "box",
+    showlegend = FALSE,
+    name = "") %>%
+    layout(
+      yaxis = list(type = "log", title = "log(price)"),
+      xaxis = list(title = "", tickangle = -35)
+      )
+  )
+
+
+# Organize the price data on a mapbox layer
+
+
+p <-
+  plot_mapbox(boston_airbnb) %>%
+    add_markers(
+      x = ~longitude,
+      y = ~latitude,
+      color = ~log(price, 10),
+      name = "Log (base 10) of price",
+      text = 
+        ~paste(
+          name, 
+          "\nRoom type:", room_type,
+          "\nPrice: ", price,
+          "\nMinimum nights: ", minimum_nights
+          ),
+      hoverinfo = "text"
+    ) %>%
+    layout(
+      mapbox =
+        list(
+          center = list(lat = 42.32, lon = -71.1),
+          zoom = 9.5,
+          style = "dark"
+        )
+    ) 
+p
+
+
+# GPX function
+library(tmaptools)
+mbta <- read_GPX("mbta.gpx")
+
+
+stations <-
+  mbta$waypoints %>%
+    filter(grepl('Red Line|Green Line|Blue Line|Orange Line', type))
+
+T_lines <-
+  mbta$tracks %>%
+    filter(grepl('Red Line|Green Line|Blue Line|Orange Line', name))
+
+p %>% 
+  add_sf(
+    data = stations,
+    inherit = FALSE,
+    name = "MBTA T stations",
+    text = ~name,
+    hoverinfo = "text"
+    ) %>% 
+    add_sf(
+      data = T_lines,
+      text = ~name,
+      hoverinfo = "text",
+      name = "MBTA T lines"
+      )
+
+
+# Consider changing colors of lines according to color:
+add_MBTA_line <- function(p, line_color) {
+  res <-
+    p %>% 
+      add_sf(
+        data = T_lines %>% filter(grepl(line_color, name, ignore.case = TRUE)),
+        color = ~I(line_color),
+        text = ~name,
+        hoverinfo = "text",
+        name = paste0(line_color, " line")
+      )
+  return(res)  
+}
+
+p1 <- 
+  p %>% 
+    add_sf(
+      data = stations,
+      name = "MBTA T stations",
+      text = ~paste0(name, " (", type, ")"),
+      hoverinfo = "text",
+      color = I("pink"),
+      size = I(30)
+    ) %>%
+    add_MBTA_line("red") %>%
+    add_MBTA_line("green") %>%
+    add_MBTA_line("orange") %>%
+    add_MBTA_line("blue") 
+
+p1 %>% colorbar(title = "log(price)")
+
+
+boston_neighborhoods <- sf::st_read("Boston_Neighborhoods.kml")
+
+# Add the neighborhood boundaries to the map
+
+p2 <-
+  p1 %>%
+    add_sf(
+      inherit = FALSE,
+      data = boston_neighborhoods,
+      fill = "",
+      name = "Neighborhoods Boundaries",
+      text = ~Name,
+      hoverinfo = "text"
+    ) %>% 
+    colorbar(title = "log(price)")
+
+```
+
+* Final Version of Boston Airbnb Visualization
+```{r, warning=FALSE, message=FALSE}
+subplot(p0, p2, nrows = 2, heights = c(0.2, 0.8), margin = 0.1)
+```
+
